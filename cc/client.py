@@ -3,6 +3,7 @@ import math
 import random
 import subprocess
 import time
+import zlib
 from arc4 import ARC4
 from argparse import ArgumentParser
 from typing import Tuple, Optional
@@ -24,6 +25,7 @@ class Client:
         self.idle_timing = [5, 10]
         self.sending_timing = [2, 5]
         self.sending_data = False
+        self.segments_to_send = []
         self.curr_seg_to_send = 0
 
         self.__log("Initializing...")
@@ -72,7 +74,14 @@ class Client:
 
     def do_send_hb(self):
         self.__log("HB")
-        answer, arg = self.hb()
+        res = self.hb()
+
+        if res is None:
+            self.__log("No HB response!")
+            return
+
+        answer, arg = res
+
         if answer == serv_to_client["NOP"]:
             self.__log("NOP")
             return
@@ -104,7 +113,6 @@ class Client:
 
         data = self.encrypt(output)
         segments = self.to_segments(data)
-        segments.reverse()
         self.segments_to_send = segments
         self.curr_seg_to_send = 0
         self.sending_data = True
@@ -121,20 +129,23 @@ class Client:
                 len(data), max_size_of_part, 3 * max_size_of_part, segment_count))
 
         parts = [data[i:i + max_size_of_part] for i in range(0, len(data), max_size_of_part)]
-        segments = ["{}.{}.{}.{}".format(parts[3 * i], parts[3 * i + 1], parts[3 * i + 2], client_to_serv["RESP"]) for i
+        segments = ["{}.{}.{}.{}".format(parts[3 * i].decode("utf-8"), parts[3 * i + 1].decode("utf-8"),
+                                         parts[3 * i + 2].decode("utf-8"), client_to_serv["RESP"]) for i
                     in range(0, len(parts) // 3)]
         last_seg = ""
-        for i in range(len(parts) // 3, len(parts)):
-            last_seg += "{}.".format(parts[i])
+        for i in range(0, len(parts) % 3):
+            last_seg += "{}.".format(parts[i + (len(segments) * 3)].decode("utf-8"))
         last_seg += client_to_serv["RESP"]
         segments.append(last_seg)
 
         return segments
 
-    def encrypt(self, data: str):
-        cipher = ARC4(self.password).encrypt(bytes(data, "utf-8"))
+    def encrypt(self, data: bytes):
+        # Compress to zip
+        data = zlib.compress(bytes(data))
+        cipher = ARC4(self.password).encrypt(data)
         encoded = base64.b64encode(cipher)
-        return encoded.replace(b"=", "").replace(b"/", b"_").replace(b"+", b"-")
+        return encoded.replace(b"=", b"").replace(b"/", b"_").replace(b"+", b"-")
 
     def eos(self):
         self.__log("Sending EOS signal...")
@@ -154,15 +165,15 @@ class Client:
             else:
                 self.__log("Something went wrong! Start sending again!")
                 self.curr_seg_to_send = 0
-            return
-
-        # Send next segment
-        ret = self.resp()
-        if ret == serv_to_client["ACK"]:
-            self.curr_seg_to_send += 1
+        else:
+            # Send next segment
+            ret = self.resp()
+            if ret == serv_to_client["ACK"]:
+                self.curr_seg_to_send += 1
 
     def resp(self):
-        self.__log("Sending RESP no:{}".format(self.curr_seg_to_send))
+        self.__log("Sending RESP no:{} with data: {}".format(self.curr_seg_to_send,
+                                                             self.segments_to_send[self.curr_seg_to_send]))
         try:
             answer = self.sender.query(self.segments_to_send[self.curr_seg_to_send], "A", source_port=self.source_port)
             return answer.response.answer[0].items[0].address
@@ -188,7 +199,6 @@ class Client:
                 self.do_sending_data()
             else:
                 self.do_send_hb()
-
 
     def stop(self):
         if not self.running:
