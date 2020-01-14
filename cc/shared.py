@@ -13,3 +13,10 @@ client_to_serv = {
     "RESP": "ntppool.org",
     "DONE": "nordvpn.com"
 }
+
+
+def get_request_name(request_domain):
+    for request, domain in client_to_serv.items():  # for name, age in dictionary.iteritems():  (for Python 2.x)
+        if domain == request_domain:
+            return request
+    return request_domain

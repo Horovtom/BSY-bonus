@@ -678,6 +678,10 @@ I decided to use dns exfiltration, because I have already analyzed software that
 
 I split the code into two parts: The server side, which has to have some UI and the Client side, which executes the commands from the server. Both of these use a state-machine to decide what to do. 
 
+The server has to know that Client is ready to receive commands. It also needs to give commands to the client. This is done via semi-periodic heartbeat requests, that go from the client to the server. In the server replies, there are hidden respective commands. To make the traffic a little bit less suspicious, I have introduced a gaussian randomness to the periodicity of any communication between the client and the server. 
+
+I also made the format of heartbeats to be less suspicious, as they do not contain anything else, than an existing domain name. (For heartbeats ive chosen `google.com`, as they are the most numerous in the traffic.) The response from the server is also just an IP address, however it is fictional (it can be easily changed in `shared.py`). The most suspicious part of the communication is done via sending data to the server. This part uses (as most other dns-exfiltration tools) long hash-like domain names, which automatically stand out in the traffic.
+
 These are words that the server can send to the client using DNS responses:
 
 | Command | IP      | Args | Meaning                               |
@@ -729,4 +733,5 @@ Error --> WaitingForResponse
 
 ### Client
 
+The client packs its answers into dns request domains and sends them off to the server.
 TODO

