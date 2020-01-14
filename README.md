@@ -686,7 +686,7 @@ These are words that the server can send to the client using DNS responses:
 
 | Command | IP      | Args | Meaning                               |
 |---------|---------|------|---------------------------------------|
-| NOP     | 1.2.3.1 |      | No operation                          |
+| NOP     | 1.2.3.1 |      | No operation                          | 
 | RST     | 1.2.4.3 |      | Reset - Error occured                 |
 | ACK     | 1.2.3.4 |      | Acknowledged                          |
 | CAT     | 1.2.3.6 | Path | Get contents of a file on Path        |
@@ -697,14 +697,14 @@ These are words that the server can send to the client using DNS responses:
 
 And this is a table of words the client can send to the server using DNS requests:
 
-| Command  | Domain      | Args | Meaning               |
-|----------|-------------|------|-----------------------|
-| HB       | google.com  |      | Heartbeat - I am here!|
-| RESP     | ntppool.org | data | Sending data segment  |
-| DONE     | nordvpn.com |      | Data stream finished  |
+| Command  | Domain      | Args | Meaning               | Type |
+|----------|-------------|------|-----------------------|------|
+| HB       | google.com  |      | Heartbeat - I am here!| TXT  |
+| RESP     | ntppool.org | data | Sending data segment  | A    |
+| DONE     | nordvpn.com |      | Data stream finished  | A    |
 
 
-### Server
+### State machine of the server
 
 When the server gets a new packet, it decides what to do according to this state-machine:
 ```mermaid
@@ -731,7 +731,272 @@ GotAllData --> |Decoding failed:RST| Error
 Error --> WaitingForResponse
 ```
 
-### Client
+### LS and CAT
+Those commands require an argument to be passed from the server onto the client. I used the `TXT` request for this. At first, I wanted to use `A` request for the heartbeats, but that would require much more code complexity. Using `TXT` requests so often is much more suspicious, so this might need to be changed in the future.
 
-The client packs its answers into dns request domains and sends them off to the server.
-TODO
+## Usage
+Usage of this program is pretty simple. There is client script and a server script. Server script needs to be launched with these arguments:
+
+| Short   | Long         | Meaning                      | Default     |
+|---------|--------------|------------------------------|-------------|
+| `-pass` | `--password` | Password for data encryption | `heslo`     |
+| `-ip`   | `--ip`       | IP of the server             | `127.0.0.1` |
+| `-p`    | `--port`     | Port of the server           | `51271`     |
+| `-v`    | `--verbose`  | Verbose logging information  | `False`     | 
+
+And these are the argument for the clients:
+
+| Short   | Long            | Meaning                       | Default     |
+|---------|-----------------|-------------------------------|-------------|
+| `-pass` | `--password`    | Password for data encryption  | `heslo`     |
+| `-d`    | `--destination` | IP of the server              | `127.0.0.1` |
+| `-p`    | `--port`        | Port of the server            | `51271`     |
+| `-s`    | `--silent`      | Disable logging information   | `False`     |
+| `-sp`   | `--source-port` | Port for the client to run on | `51272`     |
+| `-f`    | `--fast`        | Fast traffic mode (more susp.)| `False`     |
+
+There can be multiple clients connected to one server. I tested the application on `localhost` and it worked for three different instances. The server can issue commands to individual clients in parallel, however one client can have assigned only one command at a time. 
+
+![Example setup](setup_for_three_instances.png)
+
+When launched, server will listen for incoming heartbeats of clients and register them. After at least one client is connected, the server allows the user to enter commands for that client. 
+
+```shell
+No clients connected.
+New client ('127.0.0.1', 51272) registered!
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) 
+Select your target: 
+================
+```
+
+There are 6 commands and an exit command the server can issue to the client: `ls [arg]`, `cat [arg]`, `ps -aux`, `w` and `client-exit`, which turns the client off.
+
+```shell
+================
+1: ls
+2: w
+3: ps
+4: cat
+5: nop
+6: client-exit
+7: exit
+Command number: 
+================
+```
+
+After issuing some command to the client, it will enter a `BUSY` state. It will be unavailable for selection, until it finishes the issued command. This can take quite a while (depending on the length of output), especially if the `-f` flag is not set on the clients. 
+
+```shell
+================
+0: Refresh
+1: ('127.0.0.1', 51272) - BUSY
+Select your target: 
+================
+1
+You have selected a busy client! Try again when it finishes its task.
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) - BUSY
+Select your target: 
+================
+```
+
+After the command is finished, you will see a notification in the console. Then when the display is refreshed, it will display the result of said command:
+
+```shell
+================
+0: Refresh
+1: ('127.0.0.1', 51272) - BUSY
+Select your target: 
+================
+-- ('127.0.0.1', 51272): Answered! Refresh to show it.
+0
+
+~~~~~~~~~~~~~~~~
+Reply from ('127.0.0.1', 51272) for request: W:
+ 18:07:18 up 3 days,  8:31,  1 user,  load average: 0,83, 0,99, 1,02
+USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT
+lactosis tty7     :0                So09    3days  1:06         /bin/sh /usr/lib/gnome-session/run-systemd-session unity-session.target
+
+~~~~~~~~~~~~~~~~
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) 
+Select your target: 
+================
+```
+
+Both server and client sides can be safely closed using the `ctrl+c` command.
+
+### Example of two-on-one communication with clients:
+```shell
+lactosis@Lactosis-NTB:~/Documents/School/BSY/final/BSY-bonus/cc$ python3 server.py 
+No clients connected.
+-- New client ('127.0.0.1', 51272) registered!
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) 
+Select your target: 
+================
+-- New client ('127.0.0.1', 21223) registered!
+0
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) 
+2: ('127.0.0.1', 21223) 
+Select your target: 
+================
+1
+
+================
+1: ls
+2: w
+3: ps
+4: cat
+5: nop
+6: client-exit
+7: exit
+Command number: 
+================
+1
+Enter argument: /
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) - BUSY
+2: ('127.0.0.1', 21223) 
+Select your target: 
+================
+2
+
+================
+1: ls
+2: w
+3: ps
+4: cat
+5: nop
+6: client-exit
+7: exit
+Command number: 
+================
+2
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) - BUSY
+2: ('127.0.0.1', 21223) - BUSY
+Select your target: 
+================
+2
+You have selected a busy client! Try again when it finishes its task.
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) - BUSY
+2: ('127.0.0.1', 21223) - BUSY
+Select your target: 
+================
+-- ('127.0.0.1', 21223): Answered! Refresh to show it.
+-- ('127.0.0.1', 51272): Answered! Refresh to show it.
+0
+
+~~~~~~~~~~~~~~~~
+Reply from ('127.0.0.1', 51272) for request: LS:
+bin
+boot
+cdrom
+dev
+etc
+home
+initrd.img
+initrd.img.old
+lib
+lib32
+lib64
+lost+found
+media
+mnt
+opt
+proc
+root
+run
+sbin
+snap
+srv
+sys
+tmp
+usr
+var
+vmlinuz
+vmlinuz.old
+
+~~~~~~~~~~~~~~~~
+
+~~~~~~~~~~~~~~~~
+Reply from ('127.0.0.1', 21223) for request: W:
+ 18:11:01 up 3 days,  8:35,  1 user,  load average: 0,68, 0,84, 0,95
+USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT
+lactosis tty7     :0                So09    3days  1:06         /bin/sh /usr/lib/gnome-session/run-systemd-session unity-session.target
+
+~~~~~~~~~~~~~~~~
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) 
+2: ('127.0.0.1', 21223) 
+Select your target: 
+================
+1
+
+================
+1: ls
+2: w
+3: ps
+4: cat
+5: nop
+6: client-exit
+7: exit
+Command number: 
+================
+6
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) - BUSY
+2: ('127.0.0.1', 21223) 
+Select your target: 
+================
+0
+
+================
+0: Refresh
+1: ('127.0.0.1', 51272) - BUSY
+2: ('127.0.0.1', 21223) 
+Select your target: 
+================
+0
+Cleaning up client ('127.0.0.1', 51272) because of inactivity
+
+================
+0: Refresh
+1: ('127.0.0.1', 21223) 
+Select your target: 
+================
+^CYou pressed Ctrl+C!
+Stopping daemon...
+```
+
+Commands with arguments offer a "hacky" way of launching commands that are not in the basic instruction set. However these arguments are not encoded in any way in the `TXT` packets, so they are visible to anybody inspecting the traffic. As the commands are executed using `subprocess` python module, it will reject arguments that are too long and I could not come up with a nice example. However, I cannot guarantee that there is no way of exploiting this *feature*.
+
+Finally let's look at the traffic this tool generates. I captured traffic using the `-f` switch
+
+![Traffic](cc_traffic.png)
+
+

