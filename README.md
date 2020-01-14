@@ -1007,4 +1007,18 @@ Finally let's look at the traffic this tool generates. I captured traffic using 
 
 ![Traffic](cc_traffic.png)
 
-As much as 
+## Things to do in the future
+There are many things this application could have in the future. For example:
+
+* Better user interface - the current version does not have the best visual estetics.
+* More rigid protocol - There are edge-cases when the protocol will deadlock and the client has to be restarted. 
+* Support for custom console commands
+* Support for other protocols other than `DNS`
+* Config files for all the constants used throughout the code
+* Better calculation of optimal variance for gaussian randomness
+
+## Disclaimer
+This tool is intended to be used in a legal and legitimate way only:
+
+* either on your own systems as a means of learning, of demonstrating what can be done and how, or testing your defense and detection mechanisms
+* on systems you've been officially and legitimately entitled to perform some security assessments (pentest, security audits)
