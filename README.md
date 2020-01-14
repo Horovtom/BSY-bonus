@@ -1,3 +1,11 @@
+# Bonus assignment
+**Author**: Tomáš Hořovský 
+
+**Email**: horovtom@fel.cvut.cz
+
+This was the final bonus assignment for the BSY course at ČVUT Prague. 
+
+As an entry point for this assignment, we got a `.pcap` file and an IP address of submission server.
 
 # Part 1
 
@@ -753,7 +761,7 @@ And these are the argument for the clients:
 | `-p`    | `--port`        | Port of the server            | `51271`     |
 | `-s`    | `--silent`      | Disable logging information   | `False`     |
 | `-sp`   | `--source-port` | Port for the client to run on | `51272`     |
-| `-f`    | `--fast`        | Fast traffic mode (more susp.)| `False`     |
+| `-f`    | `--fast`        | Fast traffic mode             | `False`     |
 
 There can be multiple clients connected to one server. I tested the application on `localhost` and it worked for three different instances. The server can issue commands to individual clients in parallel, however one client can have assigned only one command at a time. 
 
@@ -772,7 +780,7 @@ Select your target:
 ================
 ```
 
-There are 6 commands and an exit command the server can issue to the client: `ls [arg]`, `cat [arg]`, `ps -aux`, `w` and `client-exit`, which turns the client off.
+There are 5 commands and an exit command the server can issue to the client. Four of these are regular Linux commands: `ls [arg]`, `cat [arg]`, `ps -aux`, `w` and `client-exit` command, which turns the client off.
 
 ```shell
 ================
@@ -999,4 +1007,4 @@ Finally let's look at the traffic this tool generates. I captured traffic using 
 
 ![Traffic](cc_traffic.png)
 
-
+As much as 
